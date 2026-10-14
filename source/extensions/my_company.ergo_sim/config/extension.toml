@@ -1,0 +1,15 @@
+[package]
+title = "Ergonomics Simulation"
+version = "0.1.0"  # Semantic Versioning is used: https://semver.org/
+description = "RULA ergonomic scoring (with load/force) for animated digital humans."
+category = "Simulation"  # How to categorize this in the Extension Manager
+keywords = ["kit", "ergonomics", "RULA"]  # Search keywords for the Extension Manager
+
+
+[dependencies]
+"omni.kit.uiapp" = {}
+"omni.usd" = {}
+
+
+[[python.module]]  # Main python module this extension provides
+name = "my_company.ergo_sim"
