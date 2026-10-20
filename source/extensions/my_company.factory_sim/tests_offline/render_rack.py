@@ -30,10 +30,18 @@ def main(out, times, size=(560, 420)):
             for a, v in zip((anim.CreateTranslationsAttr(), anim.CreateRotationsAttr(), anim.CreateScalesAttr()), rig.arrays(pose, w)):
                 a.Set(v, f)
         UsdSkel.BindingAPI.Apply(rig.prim).CreateAnimationSourceRel().SetTargets([anim.GetPath()])
+    if hasattr(CC, 'write_tools'):
+        CC.write_tools(st, max(frames) + 1)
+    from assembly import scene as SCN
+    SCN.write_bolts(st, list(C.BOLT_EVENTS), max(frames) + 1, kit=SCL.KIT)
+    wide = CC.wide_keys(st, workers, end)[0] if os.environ.get("RACK_CAM") == "wide" else None
     ims = []
     for f, t in zip(frames, times):
-        geo = PV.collect(st, Usd.TimeCode(f), skip=("/World/Worker", "/World/Environment")) + SK.skinned(st, f)
-        eye, at = D.at(t, CC.DIRECTOR_KEYS)
+        skip = ("/World/Worker",) if os.environ.get("RACK_ENV") else ("/World/Worker", "/World/Environment")
+        geo = PV.collect(st, Usd.TimeCode(f), skip=skip) + SK.skinned(st, f)
+        eye, at = D.at(t, wide if os.environ.get("RACK_CAM") == "wide" else CC.DIRECTOR_KEYS)
+        if os.environ.get('RACK_EYE'):                      # fixed close-up: 'ex,ey,ez;ax,ay,az'
+            eye, at = [tuple(float(v) for v in q.split(',')) for q in os.environ['RACK_EYE'].split(';')]
         p = os.path.join(out, f"t{t:05.1f}.png")
         PV.render(geo, p, eye, at, size=size, fov=45)
         ims.append(Image.open(p))

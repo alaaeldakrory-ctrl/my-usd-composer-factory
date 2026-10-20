@@ -9,6 +9,7 @@ import os
 
 from pxr import Gf, UsdGeom
 
+from . import hivis
 from . import pbr
 from . import scene as SC
 
@@ -16,7 +17,8 @@ RACK_ASSET = r"C:\OmniverseData\Rack\Rack_kit.usd"
 KIT = "/World/Rack/Kit"
 UP = Gf.Vec3d(0, 1, 0)
 
-FRAME_OUT = 99.9                    # |x| of the frames' outer faces: the edge they pivot on as they are walked up
+FRAME_OUT = 106.1                   # |x| of the base plates' outer edges: what the frames pivot on as they are walked up
+UPRIGHT_X = 93.5                    # |x| of the upright centre lines
 FRAME_IN = 87.2
 UPRIGHT_Z = (28.0, 50.0)            # each upright spans |z| 28..50
 FRAME_TOP = 301.0
@@ -31,10 +33,12 @@ BOLT_Y = {"Low": 42.0, "Up": 140.0}
 DECK_TOP = {"Low": 50.6, "Up": 148.3}
 DECK_EDGE = 46.0                    # |z| of the decks' long edges
 DECK_DEPTH = 92.0
+DECK_THICK = 4.6                    # wire decks: mesh top to the support channels' bottoms
 TRESTLE_TOP = 40.0
+ANCHOR_X, ANCHOR_Z, PLATE_T = 103.1, 39.0, 0.8           # one anchor in each base plate's outer tab
 BEAM_STORE = {"BeamLowF": (-130.0, 250.0), "BeamUpF": (130.0, 250.0),
               "BeamLowR": (-130.0, -250.0), "BeamUpR": (130.0, -250.0)}
-DECK_STORE = {"DeckLow": (-330.0, 266.0), "DeckUp": (-330.0, 252.0)}     # hinge-edge (x, z); standing on edge
+DECK_STORE = {"DeckLow": (0.0, 356.0), "DeckUp": (0.0, 340.0)}     # hinge-edge (x, z); standing on edge, out front
 DECK_STORE_Y = 106.0                # their top edges (they stand on a 14 cm pallet)
 
 
@@ -50,7 +54,7 @@ def frame_m(side, theta):
 def upright_point(side, d, z):
     """Frame-local point d up the outer flange of the upright at z (installed coordinates)."""
     s = -1.0 if side == "L" else 1.0
-    return Gf.Vec3d(s * 93.5, d, z)
+    return Gf.Vec3d(s * UPRIGHT_X, d, z)
 
 
 def deck_pivot(level):
@@ -100,13 +104,58 @@ def make_parts():
     for level in ("Low", "Up"):
         D = deck_pivot(level)
         holds = {}
-        for k, xs in (("a", -1.0), ("b", 1.0)):
-            holds["front_" + k] = SC.tube_grip(D + Gf.Vec3d(xs * 38.0, -6.0, -1.0), (1, 0, 0), (-xs, 0, 0), 5.5)
-            holds["rear_" + k] = SC.tube_grip(D + Gf.Vec3d(xs * 38.0, -6.0, -DECK_DEPTH + 1.0), (1, 0, 0), (-xs, 0, 0), 5.5)
+        for k, x in (("A1", -64.0), ("A2", -22.0), ("B1", 22.0), ("B2", 64.0)):     # both carry it by its front edge
+            holds["front_" + k] = SC.tube_grip(D + Gf.Vec3d(x, -1.2, -0.6), (1, 0, 0), (1, 0, 0), 1.4)
         x, z = DECK_STORE["Deck" + level]
         parts["Deck" + level] = SC.Part("Deck" + level, D, holds, (Gf.Vec3d(x, DECK_STORE_Y, z), 0.0),
                                         path=f"{KIT}/Deck{level}")
     return parts
+
+
+def anchors():
+    """(frame, anchor point on the plate top) for the four base plates."""
+    return [("Frame" + side, Gf.Vec3d(s * ANCHOR_X, PLATE_T, zs * ANCHOR_Z))
+            for side, s in (("L", -1.0), ("R", 1.0)) for zs in (1.0, -1.0)]
+
+
+# hammer drill, local frame: bit tip on the origin, +Y up the tool, +X to the operator's right, +Z away from him
+DRILL_TOP = Gf.Vec3d(0.0, 45.0, -2.0)          # rear D-handle grip (right hand)
+DRILL_SIDE = Gf.Vec3d(-13.0, 25.0, 0.0)        # side handle (left hand)
+DRILL_EXT = 0.0                                # stand-up drilling extension between bit and drill (cm)
+DRILL_STANCE = 38.0                            # worker's pelvis from the anchor
+METHOD = "current"
+
+
+def configure(method="current"):
+    """The work method the scene and choreography are built for:
+    current   beams on 40 cm trestles, frame tops on a 34 cm block, anchors drilled crouching
+    improved  beams on 80 cm trestles (waist height), frame tops on an 80 cm sawhorse, a stand-up drilling
+              extension (72 cm, handles at waist height) so the anchors are drilled standing"""
+    global TRESTLE_TOP, BLOCK_H, THETA0, DRILL_TOP, DRILL_SIDE, DRILL_EXT, DRILL_STANCE, METHOD
+    METHOD = method
+    imp = method == "improved"
+    TRESTLE_TOP = 80.0 if imp else 40.0
+    BLOCK_H = 80.0 if imp else 34.0
+    THETA0 = math.degrees(math.asin(BLOCK_H / BLOCK_D))
+    DRILL_EXT = 72.0 if imp else 0.0
+    DRILL_TOP = Gf.Vec3d(0.0, 45.0 + DRILL_EXT, -2.0)
+    DRILL_SIDE = Gf.Vec3d(-13.0, 25.0 + DRILL_EXT, 0.0)
+    DRILL_STANCE = 23.0 if imp else 38.0
+
+
+def drill(stage, path, mats):
+    from .rack_asset import _box, _rod, mesh_from
+    UsdGeom.Xform.Define(stage, path)
+    e = DRILL_EXT
+    mesh_from(stage, f"{path}/Bit", [_rod((0, 0, 0), (0, 17, 0), 0.55, 8)] +
+              ([_rod((0, 17, 0), (0, 17 + e, 0), 1.3, 8), _rod((0, 10 + e, 0), (0, 17 + e, 0), 2.4, 10)] if e else []),
+              mats["steel"], (0.6, 0.6, 0.62))
+    mesh_from(stage, f"{path}/Body", [_rod((0, 17 + e, 0), (0, 22 + e, 0), 2.2, 10), _box((-4, 22 + e, -4), (4, 40 + e, 5)),
+                                      _box((-3.5, 30 + e, 5), (3.5, 38 + e, 12))], mats["yellow"], (0.95, 0.75, 0.05))
+    mesh_from(stage, f"{path}/Grips", [_box((-1.6, 40 + e, -6), (1.6, 48 + e, 2)), _rod((-7, 45 + e, -2), (7, 45 + e, -2), 1.5, 8),
+                                       _rod((-4, 25 + e, 0), (-18, 25 + e, 0), 1.6, 8)], mats["black"], (0.05, 0.05, 0.05))
+    UsdGeom.Imageable(stage.GetPrimAtPath(path)).CreateVisibilityAttr("invisible")
+    UsdGeom.Xformable(stage.GetPrimAtPath(path)).AddTransformOp()
 
 
 def start_matrix(name, p):
@@ -146,15 +195,20 @@ def build(stage):
     # timber blocks under the frames' top ends
     for side, s in (("L", -1.0), ("R", 1.0)):
         x = s * (FRAME_OUT + BLOCK_D * math.cos(math.radians(THETA0)))
-        SC.box(stage, f"/World/Stands/Block{side}", (x - 7, 0, -60), (x + 7, BLOCK_H - 0.3, 60), mats["wood"])
+        if BLOCK_H > 50:                                   # a sawhorse: top rail on two A legs
+            SC.box(stage, f"/World/Stands/Block{side}", (x - 6, BLOCK_H - 9, -60), (x + 6, BLOCK_H - 0.3, 60), mats["wood"])
+            for k, z in enumerate((-52.0, 52.0)):
+                SC.box(stage, f"/World/Stands/Block{side}Leg{k}", (x - 18, 0, z - 4), (x + 18, BLOCK_H - 9, z + 4), mats["black"])
+        else:
+            SC.box(stage, f"/World/Stands/Block{side}", (x - 7, 0, -60), (x + 7, BLOCK_H - 0.3, 60), mats["wood"])
     # trestle pairs under the beams
     for name, (x, z) in BEAM_STORE.items():
         for k, dx in enumerate((-60.0, 60.0)):
             SC.box(stage, f"/World/Stands/{name}{k}", (x + dx - 6, 0, z - 14), (x + dx + 6, TRESTLE_TOP, z + 14), mats["black"])
-    # deck stillage: pallet-height base and a back frame the decks stand against
+    # deck stillage out front: pallet-height base and a back frame the decks stand against
     xs = DECK_STORE["DeckLow"][0]
     zs = [z for _, z in DECK_STORE.values()]
-    SC.box(stage, "/World/Stands/DeckBase", (xs - 95, 0, min(zs) - 6), (xs + 95, DECK_STORE_Y - DECK_DEPTH, max(zs) + 18),
+    SC.box(stage, "/World/Stands/DeckBase", (xs - 95, 0, min(zs) - 6), (xs + 95, DECK_STORE_Y - DECK_DEPTH, max(zs) + 12),
            mats["wood"])
     for k, dx in enumerate((-85.0, 85.0)):
         SC.box(stage, f"/World/Stands/DeckPost{k}", (xs + dx - 3, 0, min(zs) - 6), (xs + dx + 3, 95, min(zs) - 2), mats["black"])
@@ -163,6 +217,7 @@ def build(stage):
     UsdGeom.Xform.Define(stage, "/World/Tools")
     for n in ("A", "B"):
         SC.wrench(stage, f"/World/Tools/Wrench{n}", mats)
+        drill(stage, f"/World/Tools/Drill{n}", mats)
     cam = UsdGeom.Camera.Define(stage, "/World/Cameras/Overview")
     cam.CreateFocalLengthAttr(22.0)
     cam.CreateClippingRangeAttr(Gf.Vec2f(5.0, 100000.0))
@@ -170,4 +225,6 @@ def build(stage):
         Gf.Matrix4d().SetLookAt(Gf.Vec3d(520, 300, 620), Gf.Vec3d(0, 110, 0), Gf.Vec3d(0, 1, 0)).GetInverse())
     a = SC.character(stage, "/World/WorkerA", SC.WORKER_A)
     b = SC.character(stage, "/World/WorkerB", SC.WORKER_B)
+    hivis.apply(stage, "/World/WorkerA", "uniform_m_0001")       # hi-vis vests (hivis.py builds the textures)
+    hivis.apply(stage, "/World/WorkerB", "uniform_f_0001")
     return parts, {"A": a, "B": b}

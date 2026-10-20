@@ -32,6 +32,7 @@ LOOKS = {
     "decal_white": dict(color=srgb_to_linear((0.95, 0.95, 0.95)), rough=0.25, metal=0.0, normal=None, bump=0.0, rmap=0.0),
     "steel_tread": dict(color=(0.45, 0.46, 0.48), rough=0.45, metal=1.0, normal="steel_n", bump=0.5, rmap=0.0),
     "lift_blue": dict(color=srgb_to_linear((0.08, 0.22, 0.55)), rough=0.32, metal=0.0, normal="paint_n", bump=0.25, rmap=0.25),
+    "galvanised": dict(color=(0.62, 0.63, 0.64), rough=0.38, metal=1.0, normal="steel_n", bump=0.15, rmap=0.0),
     "timber": dict(color=srgb_to_linear((0.62, 0.47, 0.3)), rough=0.75, metal=0.0, normal="satin_n", bump=0.6, rmap=0.3),
     "yellow_tape": dict(color=srgb_to_linear((0.95, 0.72, 0.05)), rough=0.5, metal=0.0, normal="satin_n", bump=0.2, rmap=0.0),
 }

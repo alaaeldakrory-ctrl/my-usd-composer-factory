@@ -6,6 +6,12 @@ with a heel-off -> swing -> heel-strike roll, plus the pelvis bob / sway / rotat
 
 Reference (Uniform_M "carry" mocap, 60 fps): a step every ~0.65 s, ~60 cm per step, the foot planted dead still
 in stance, ~0.5 s swing, ankle rising ~16 cm (of which ~8 from the heel lifting), hips moving 1-2 cm.
+
+Cadence follows walking speed like people do (about 100 steps/min at 0.9 m/s, 110 at 1.3 m/s; ~78 % of a step is
+swing), and the swing foot follows the Mixamo "Walking" clip's swing (SWING_* tables below, sampled from toe-off to
+heel strike): the heel kicks up and back right after toe-off with the toes hanging, then the leg reaches forward and
+the toes come up before the heel lands. Without this the walk reads stiff and heavy (short quick steps, the foot
+skimming the floor flat).
 """
 import math
 
@@ -14,9 +20,25 @@ from pxr import Gf
 from .rig import fwd_of, left_of
 
 UP = Gf.Vec3d(0, 1, 0)
-DS = 0.07                   # double-support pause between steps (s)
-HEEL_OFF = -38.0            # foot pitch at toe-off (deg)
+DS = 0.07                   # double-support pause between corrective (standing) steps (s)
+HEEL_OFF = -38.0            # foot pitch at toe-off (deg) for the procedural swing (stairs)
 HEEL_LEAD = 0.22            # the heel starts rising this long before the foot leaves the floor (s)
+# Mixamo Walking, left foot, toe-off -> heel strike in 12 equal time slices (151 cm of foot travel, hips 91 cm):
+SWING_S = (0.0, 0.049, 0.111, 0.185, 0.269, 0.364, 0.466, 0.568, 0.673, 0.779, 0.875, 0.952, 1.0)   # travel fraction
+SWING_H = (0.0, 3.48, 6.39, 8.28, 8.32, 6.69, 4.38, 1.57, -0.77, -1.66, -0.98, 0.3, 0.0)           # ankle rise (cm)
+SWING_P = (-42.7, -50.1, -39.7, -36.9, -45.9, -46.7, -34.4, -19.5, -4.7, 7.3, 16.3, 23.3, 27.2)    # foot pitch (deg)
+CLIP_TRAVEL, CLIP_HIP = 151.6, 90.9
+
+
+def _table(tab, v):
+    x = min(max(v, 0.0), 1.0) * (len(tab) - 1)
+    k = min(int(x), len(tab) - 2)
+    return tab[k] + (tab[k + 1] - tab[k]) * (x - k)
+
+
+def step_period(speed, scale):
+    """Seconds per step at a walking speed (cm/s): ~0.62 s at 0.85 m/s, ~0.54 s at 1.3 m/s; shorter legs step quicker."""
+    return 60.0 / (70.0 + 0.32 * min(max(speed, 0.0), 160.0)) * scale
 
 
 def wrap(a):
@@ -62,8 +84,9 @@ class Gait:
         p, h = self.root_at(0.0)
         plant = {s: self.ideal(p, h, s, 0.0) for s in "LR"}
         last, t_land, t = "R", -1.0, 0.0
+        ds = DS
         while t < t_end + 1.0:
-            if t - t_land >= DS:
+            if t - t_land >= ds:
                 moving = self._moving(t)
                 t_pred = t + 0.40 + 0.2              # nominal swing + until the foot is under the hips (mocap: ~0.2 s)
                 pp, hh = self.root_at(t_pred)
@@ -80,7 +103,12 @@ class Gait:
                     other = "R" if side == "L" else "L"
                     a = plant[side]
                     d0 = (self.ideal(pp, hh, side, t_pred)[0] - a[0]).GetLength()
-                    T = min(0.46, max(0.32, 0.30 + d0 / 450.0)) * self.scale
+                    speed = (self.root_at(t + 0.5)[0] - self.root_at(t)[0]).GetLength() / 0.5
+                    if moving and speed > 20.0:              # walking: swing ~78 % of the step period
+                        P = step_period(speed, self.scale)
+                        T, ds = 0.78 * P, 0.22 * P
+                    else:                                    # shuffles / turns on the spot
+                        T, ds = min(0.46, max(0.32, 0.30 + d0 / 450.0)) * self.scale, DS
                     pp, hh = self.root_at(t + T + 0.2)
                     b = self.ideal(pp, hh, side, t + T)
                     b = self._limit(b, plant[other], side, hh, t + T)
@@ -151,16 +179,23 @@ class Gait:
             pos, yaw = planted
             nxt = self._next(s, t)
             if nxt is not None and nxt.k > 0 and nxt.t0 - t < HEEL_LEAD:
-                th = HEEL_OFF * nxt.k * 0.85 * ease(1 - (nxt.t0 - t) / HEEL_LEAD)
+                th0 = self._clip_pitch(nxt)[0] if self._clip_ok(nxt) else HEEL_OFF * nxt.k * 0.85
+                th = th0 * ease(1 - (nxt.t0 - t) / HEEL_LEAD)
                 return self._toe_pivot(s, pos, yaw, th), yaw, th, 0.0, None
             return pos + UP * ah, yaw, 0.0, 0.0, None
         u = (t - stp.t0) / max(stp.t1 - stp.t0, 1e-6)
         k = stp.k
         pa, ya = stp.a
         pb, yb = stp.b
-        heel_off, strike = HEEL_OFF * k, 14.0 * k
-        U1, U3 = 0.15 * k, 1.0 - 0.18 * k
-        h0 = HEEL_OFF * k * 0.85                          # already lifted during late stance
+        clip = self._clip_ok(stp)
+        if clip:
+            heel_off, strike, amp = self._clip_pitch(stp)
+            U1, U3 = 0.0, 1.0 - 0.18 * k
+            h0 = heel_off
+        else:
+            heel_off, strike = HEEL_OFF * k, 14.0 * k
+            U1, U3 = 0.15 * k, 1.0 - 0.18 * k
+            h0 = HEEL_OFF * k * 0.85                      # already lifted during late stance
 
         def toe_pivot(theta):
             return self._toe_pivot(s, pa, ya, theta)
@@ -181,6 +216,22 @@ class Gait:
         v = (u - U1) / max(U3 - U1, 1e-6)
         P1 = toe_pivot(heel_off) if k > 0 else pa + UP * ah
         P3 = heel_pivot(strike) if k > 0 else pb + UP * ah
+        if clip:                                     # the mocap swing, fitted between the two footprints
+            sv = _table(SWING_S, v)
+            travel = (pb - pa).GetLength()
+            hs = (rig.hip_h / CLIP_HIP) * min(1.0, max(0.35, travel / CLIP_TRAVEL)) ** 0.5 * k
+            pos = P1 + (P3 - P1) * sv + UP * (_table(SWING_H, v) * hs + 1.5 * k * math.sin(math.pi * v))
+            th = _table(SWING_P, v) * amp
+            if v < 0.22:                             # still rolling over the toes as it leaves the floor
+                wv = ease(v / 0.22)
+                pos = toe_pivot(th) * (1 - wv) + pos * wv
+            elif v > 0.85:                           # and landing onto the heel without skidding
+                wv = ease((v - 0.85) / 0.15)
+                pos = pos * (1 - wv) + heel_pivot(th) * wv
+            toe = th * ease(min(1.0, v / 0.3)) if v < 0.3 else None      # the toes peel off the floor
+            if toe is not None and th < 0:
+                toe = max(th, toe)
+            return pos, ya + wrap(yb - ya) * ease(sv), th, toe, u
         e = ease(v)
         hor = P1 + (P3 - P1) * e
         rise = P3[1] - P1[1]
@@ -192,11 +243,21 @@ class Gait:
             bump = 4.0
         else:
             vy, bump = v, 0.0
-        lift = (2.5 + 6.0 * k + bump) * math.sin(math.pi * v) + (P1[1] + rise * vy - hor[1])
+        lift = (4.5 + 4.0 * k + bump) * math.sin(math.pi * v) + (P1[1] + rise * vy - hor[1])
         th = heel_off + (strike - heel_off) * ease(min(1.0, v * 1.25))
         toe = heel_off * (1 - ease(min(1.0, v * 2.0))) if k > 0 else None
         toe = None if toe is None else max(th, toe) if th < 0 else None
         return hor + UP * lift, ya + wrap(yb - ya) * e, th, toe, u
+
+    def _clip_ok(self, stp):
+        dy = stp.b[0][1] - stp.a[0][1]
+        return stp.k >= 0.5 and abs(dy) <= 3.0           # real walking steps on a flat floor (turns, shuffles, stairs: procedural)
+
+    def _clip_pitch(self, stp):
+        """(toe-off pitch, heel-strike pitch, pitch amplitude) for a mocap-shaped step."""
+        travel = (stp.b[0] - stp.a[0]).GetLength()
+        amp = stp.k * min(1.0, max(0.4, travel / CLIP_TRAVEL)) ** 0.35
+        return SWING_P[0] * amp, SWING_P[-1] * amp, amp
 
     def body(self, t):
         """Gait terms for the trunk: bob (cm), sway (world vec), pelvis yaw (deg), lean (deg), arm swing {side: cm},

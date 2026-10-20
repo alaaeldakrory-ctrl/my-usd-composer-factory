@@ -25,6 +25,22 @@ class FactorySimExtension(omni.ext.IExt):
                         self._build_forklift_ui()
                     with ui.CollapsableFrame("Flow simulation", collapsed=True):
                         self._build_flow_ui()
+        # jobs dropped into C:/OmniverseData/kit_jobs run inside the app (job_runner.py)
+        from .job_runner import JobRunner
+        self._jobs = JobRunner()
+        # the Ergonomics window (ergo_panel.py): live RULA / spine-load readout of the assembly demos
+        self._ergo = None
+        self._ergo_menu = None
+        try:
+            from .ergo_panel import ErgoWindow
+            self._ergo = ErgoWindow()
+            import omni.kit.menu.utils as mu
+            from omni.kit.menu.utils import MenuItemDescription
+            self._ergo_menu = [MenuItemDescription(name="Ergonomics", onclick_fn=self._show_ergo)]
+            mu.add_menu_items(self._ergo_menu, "Window")
+        except Exception as e:   # noqa: BLE001
+            import carb
+            carb.log_error(f"[factory_sim] Ergonomics window failed: {e}")
 
     # ------------------------------------------------------------------ forklift operations
     def _build_forklift_ui(self):
@@ -150,7 +166,24 @@ class FactorySimExtension(omni.ext.IExt):
             self._sim.stop()
             self._status_label.model.set_value("Stopped.")
 
+    def _show_ergo(self, *_):
+        if self._ergo and self._ergo.window:
+            self._ergo.window.visible = True
+            self._ergo.window.focus()
+
     def on_shutdown(self):
+        if getattr(self, "_jobs", None):
+            self._jobs.destroy()
+            self._jobs = None
+        if getattr(self, "_ergo_menu", None):
+            try:
+                import omni.kit.menu.utils as mu
+                mu.remove_menu_items(self._ergo_menu, "Window")
+            except Exception:   # noqa: BLE001
+                pass
+        if getattr(self, "_ergo", None):
+            self._ergo.destroy()
+            self._ergo = None
         if self._sim:
             self._sim.stop()
         if self._window:

@@ -23,6 +23,7 @@ for n in "AB":
     queries[n] = cache.GetSkelQuery(UsdSkel.Skeleton(skel))
 if RACK:
     from assembly import choreo_rack as CC, scene_rack as SCL
+    SCL.configure("improved" if "Improved" in PATH else "current")
     parts = SCL.make_parts()
     tracks, workers, end = CC.script(parts, rigs)
 elif CARLIFT:
@@ -36,6 +37,7 @@ ctx = C.Ctx(tracks, workers)
 n_frames = int(st.GetEndTimeCode()) + 1
 worst = {n: [] for n in "AB"}
 slide = {n: 0.0 for n in "AB"}
+slips = {n: [] for n in "AB"}
 clear = {n: (1e9, None) for n in "AB"}
 prev = {n: None for n in "AB"}
 UP = Gf.Vec3d(0, 1, 0)
@@ -65,6 +67,8 @@ for f in range(0, n_frames, 2):
                 if feet[s][1] < 3.0 and prev[n][s][1] < 3.0:
                     d = math.hypot(feet[s][0] - prev[n][s][0], feet[s][2] - prev[n][s][2])
                     slide[n] = max(slide[n], d)
+                    if d > 2.0:
+                        slips[n].append(round(t, 1))
         prev[n] = feet
         for j in ("Hip", "L_Calf", "R_Calf", "Spine02"):
             p = J[j]
@@ -80,6 +84,7 @@ for n in "AB":
     w = sorted(worst[n], reverse=True)
     print(f"Worker {n}: grip error worst {w[0][0]:.1f} cm at {w[0][1]}s {w[0][2]}, p95 {w[len(w)//20][0]:.1f} cm; "
           f"max planted-toe slide per 2 frames {slide[n]:.2f} cm; closest body to lift {clear[n][0]:.1f} cm {clear[n][1]}")
+    print("   toe slips > 2 cm at:", slips[n][:40])
     bad = sorted({int(e[1]) for e in w if e[0] > 3.0})
     print("   seconds with >3 cm:", bad)
 for name, p in parts.items():
